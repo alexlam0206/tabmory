@@ -6,7 +6,7 @@ function setOutput(value) {
   outputEl.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 }
 
-function fetchCurrentTabTitles(cb) {
+function fetchCurrentTabInfo(cb) {
   chrome.tabs.query({}, (tabs) => {
     if (chrome.runtime.lastError) {
       console.log('Popup chrome.tabs.query lastError:', chrome.runtime.lastError.message);
@@ -15,6 +15,7 @@ function fetchCurrentTabTitles(cb) {
     }
 
     const titleById = {};
+    const windowIdById = {};
     const existingById = {};
 
     (tabs || []).forEach((tab) => {
@@ -23,10 +24,11 @@ function fetchCurrentTabTitles(cb) {
       existingById[id] = true;
       const title = tab && typeof tab.title === 'string' ? tab.title.trim() : '';
       if (title) titleById[id] = title;
+      if (tab && typeof tab.windowId === 'number') windowIdById[id] = tab.windowId;
     });
 
     console.log('Popup current tabs count:', (tabs || []).length);
-    cb(titleById, existingById);
+    cb(titleById, windowIdById, existingById);
   });
 }
 
@@ -76,15 +78,59 @@ function renderBreadcrumbsWithTitles(relationships, titleById, existingById) {
       current = parentOf[current];
     }
 
-    const text = path.map((id) => label(id)).join(' > ');
-    if (seen.has(text)) return;
-    seen.add(text);
-
     const li = document.createElement('li');
-    li.textContent = text;
+    const key = path.join('>');
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    path.forEach((id, idx) => {
+      if (idx > 0) li.appendChild(document.createTextNode(' > '));
+      const a = document.createElement('a');
+      a.href = '#';
+      a.dataset.tabId = String(id);
+      a.textContent = label(id);
+      li.appendChild(a);
+    });
     breadcrumbsEl.appendChild(li);
   });
 }
+
+function focusTab(tabId) {
+  const numericId = Number(tabId);
+  if (!Number.isFinite(numericId)) return;
+
+  chrome.tabs.get(numericId, (tab) => {
+    if (chrome.runtime.lastError) {
+      console.log('Popup chrome.tabs.get lastError:', chrome.runtime.lastError.message);
+      setOutput(chrome.runtime.lastError.message);
+      return;
+    }
+    if (!tab) return;
+
+    chrome.tabs.update(numericId, { active: true }, () => {
+      if (chrome.runtime.lastError) {
+        console.log('Popup chrome.tabs.update lastError:', chrome.runtime.lastError.message);
+      }
+    });
+
+    if (typeof tab.windowId === 'number') {
+      chrome.windows.update(tab.windowId, { focused: true }, () => {
+        if (chrome.runtime.lastError) {
+          console.log('Popup chrome.windows.update lastError:', chrome.runtime.lastError.message);
+        }
+      });
+    }
+  });
+}
+
+breadcrumbsEl.addEventListener('click', (e) => {
+  const link = e.target && e.target.closest ? e.target.closest('a[data-tab-id]') : null;
+  if (!link) return;
+  e.preventDefault();
+  const tabId = link.dataset.tabId;
+  console.log('Popup focusing tab:', tabId);
+  focusTab(tabId);
+});
 
 function requestRelationships() {
   console.log('Popup requesting relationships...');
@@ -97,7 +143,7 @@ function requestRelationships() {
     console.log('Popup received response:', response);
     if (response && response.ok) {
       const relationships = response.relationships || {};
-      fetchCurrentTabTitles((titleById, existingById) => {
+      fetchCurrentTabInfo((titleById, windowIdById, existingById) => {
         console.log('Popup titleById keys:', Object.keys(titleById).length);
         renderBreadcrumbsWithTitles(relationships, titleById, existingById);
         setOutput('');

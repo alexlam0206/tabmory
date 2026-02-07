@@ -15,10 +15,13 @@ chrome.tabs.onCreated.addListener((tab) => {
   console.log('--- Tab Created Event ---');
   
   if (tab.openerTabId) {
-    if (!parentToChildren[tab.openerTabId]) {
-      parentToChildren[tab.openerTabId] = [];
+    const parentId = String(tab.openerTabId);
+    const childId = String(tab.id);
+
+    if (!parentToChildren[parentId]) {
+      parentToChildren[parentId] = [];
     }
-    parentToChildren[tab.openerTabId].push(tab.id);
+    parentToChildren[parentId].push(childId);
 
     chrome.storage.local.set({ tabRelationships: parentToChildren }, () => {
       console.log('Data saved to storage:', parentToChildren);
@@ -26,6 +29,41 @@ chrome.tabs.onCreated.addListener((tab) => {
   }
 
   console.log('Current Map:', parentToChildren);
+});
+
+chrome.tabs.onRemoved.addListener((tabId, removeInfo) => {
+  const removedId = String(tabId);
+  console.log('--- Tab Removed Event ---');
+  console.log('Removed Tab ID:', removedId);
+  console.log('Remove Info:', removeInfo);
+
+  let changed = false;
+
+  if (parentToChildren[removedId]) {
+    delete parentToChildren[removedId];
+    changed = true;
+  }
+
+  Object.keys(parentToChildren).forEach((parentId) => {
+    const children = Array.isArray(parentToChildren[parentId]) ? parentToChildren[parentId] : [];
+    const filtered = children.map(String).filter((childId) => childId !== removedId);
+    if (filtered.length !== children.length) changed = true;
+    if (filtered.length === 0) {
+      delete parentToChildren[parentId];
+      changed = true;
+    } else {
+      parentToChildren[parentId] = filtered;
+    }
+  });
+
+  if (!changed) {
+    console.log('No relationship changes needed.');
+    return;
+  }
+
+  chrome.storage.local.set({ tabRelationships: parentToChildren }, () => {
+    console.log('Relationships cleaned after removal:', parentToChildren);
+  });
 });
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
